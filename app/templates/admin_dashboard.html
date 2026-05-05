@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}CanPi - Admin{% endblock %}
+{% block content %}
+<div class="row mb-3">
+  <div class="col">
+    <h4><i class="bi bi-gear"></i> Administration</h4>
+  </div>
+</div>
+
+<!-- Users Section -->
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-people"></i> User Management</span>
+    <a href="{{ url_for('main.create_user_route') }}" class="btn btn-canpi btn-sm">
+      <i class="bi bi-person-plus"></i> Create User
+    </a>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-dark table-hover mb-0">
+        <thead>
+          <tr>
+            <th>ID</th><th>Username</th><th>Role</th><th>CAN Access</th><th>Active</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for user in users %}
+          <tr>
+            <td>{{ user.id }}</td>
+            <td>{{ user.username }}</td>
+            <td><span class="badge {{ 'bg-warning text-dark' if user.role == 'admin' else 'bg-info' }}">{{ user.role }}</span></td>
+            <td><code>{{ user.can_access }}</code></td>
+            <td>
+              <span class="status-dot {{ 'active' if user.active else 'inactive' }}"></span>
+              {{ 'Yes' if user.active else 'No' }}
+            </td>
+            <td>
+              {% if user.username != 'admin' %}
+              <form method="post" action="{{ url_for('main.edit_user', user_id=user.id) }}" class="d-inline">
+                <input type="hidden" name="action" value="delete">
+                <button type="submit" class="btn btn-outline-danger btn-sm"
+                        onclick="return confirm('Delete user {{ user.username }}?')">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- API Keys Section -->
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-key"></i> API Keys
+  </div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('main.api_keys_page') }}" class="row g-2 mb-3">
+      <div class="col-auto">
+        <input type="text" class="form-control form-control-sm" name="name" placeholder="Key name" required>
+      </div>
+      <div class="col-auto">
+        <div class="form-check form-check-inline mt-1">
+          <input class="form-check-input" type="checkbox" name="can_access" value="can0" checked>
+          <label class="form-check-label small">can0</label>
+        </div>
+        <div class="form-check form-check-inline mt-1">
+          <input class="form-check-input" type="checkbox" name="can_access" value="can1" checked>
+          <label class="form-check-label small">can1</label>
+        </div>
+        <div class="form-check form-check-inline mt-1">
+          <input class="form-check-input" type="checkbox" name="can_access" value="can9" checked>
+          <label class="form-check-label small">can9</label>
+        </div>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-canpi btn-sm"><i class="bi bi-plus-lg"></i> Generate Key</button>
+      </div>
+    </form>
+
+    {% if api_keys %}
+    <div class="table-responsive">
+      <table class="table table-dark table-sm mb-0">
+        <thead><tr><th>Prefix</th><th>Name</th><th>CAN Access</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+          {% for key in api_keys %}
+          <tr>
+            <td><code>{{ key.key_prefix }}...</code></td>
+            <td>{{ key.name }}</td>
+            <td><code>{{ key.can_access }}</code></td>
+            <td>{{ key.created_at[:16] }}</td>
+            <td>
+              <form method="post" action="{{ url_for('main.revoke_key', key_id=key.id) }}" class="d-inline">
+                <button type="submit" class="btn btn-outline-danger btn-sm"
+                        onclick="return confirm('Revoke this key?')">Revoke</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0">No active API keys.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- PAMAS Section -->
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-droplet"></i> PAMAS S50P Monitoring</span>
+    <span class="badge {{ 'bg-success' if pamas_running else 'bg-secondary' }}">
+      {{ 'Running' if pamas_running else 'Stopped' }}
+    </span>
+  </div>
+  <div class="card-body">
+    {% if pamas_data %}
+    <div class="table-responsive">
+      <table class="table table-dark table-sm">
+        <thead><tr><th>Device</th><th>Port</th><th>Fuel</th><th>Quality</th><th>Particles (4µm)</th><th>Water (ppm)</th><th>Temp</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for d in pamas_data %}
+          <tr>
+            <td>#{{ d.device_id }}</td>
+            <td>{{ d.port }}</td>
+            <td>{{ d.get('fuel_type', '-') }}</td>
+            <td>{{ d.get('quality_index', '-') }}</td>
+            <td>{{ d.get('particle_count_4um', '-') }}</td>
+            <td>{{ d.get('water_content_ppm', '-') }}</td>
+            <td>{{ d.get('temperature_c', '-') }}°C</td>
+            <td><span class="status-dot {{ 'active' if d.connected else 'inactive' }}"></span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted mb-0">No PAMAS devices configured. Start monitoring from the dashboard.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- System Info -->
+<div class="card mb-4">
+  <div class="card-header"><i class="bi bi-info-circle"></i> System</div>
+  <div class="card-body">
+    <div class="row">
+      <div class="col-md-4">
+        <p class="mb-1"><strong>USB Drives:</strong></p>
+        <div id="usb-drives"><em class="text-muted">Checking...</em></div>
+      </div>
+      <div class="col-md-4">
+        <p class="mb-1"><strong>Health:</strong></p>
+        <div id="health-info"><em class="text-muted">Checking...</em></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // Fetch USB drives
+    fetch('/usb/drives')
+        .then(r => r.json())
+        .then(drives => {
+            const el = document.getElementById('usb-drives');
+            if (drives.length === 0) {
+                el.innerHTML = '<span class="text-muted">No USB drives detected</span>';
+            } else {
+                el.innerHTML = drives.map(d =>
+                    `<div><code>${d.path}</code> — ${d.free_mb} MB free / ${d.total_mb} MB total ${d.writable ? '✓' : '✗'}</div>`
+                ).join('');
+            }
+        }).catch(() => {
+            document.getElementById('usb-drives').textContent = 'Error checking';
+        });
+
+    // Fetch health
+    fetch('/health')
+        .then(r => r.json())
+        .then(h => {
+            document.getElementById('health-info').innerHTML =
+                `Active captures: ${h.active_captures}<br>PAMAS: ${h.pamas_running ? 'Running' : 'Stopped'}`;
+        }).catch(() => {
+            document.getElementById('health-info').textContent = 'Error';
+        });
+});
+</script>
+{% endblock %}

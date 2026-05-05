@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block title %}CanPi - Dashboard{% endblock %}
+{% block head_extra %}
+<style>
+    .gauge-card { min-height: 100px; transition: border-color 0.3s; }
+    .gauge-card.status-danger { border-color: #dc3545 !important; }
+    .gauge-card.status-warning { border-color: #ffc107 !important; }
+    .gauge-value { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+    .gauge-value.danger { color: #dc3545; }
+    .gauge-value.warning { color: #ffc107; }
+    .gauge-value.normal { color: #00d4aa; }
+    .gauge-unit { font-size: 0.75rem; color: #888; }
+    .gauge-name { font-size: 0.8rem; color: #aaa; }
+    .gauge-bar { height: 4px; border-radius: 2px; background: #333; margin-top: 6px; }
+    .gauge-bar-fill { height: 100%; border-radius: 2px; transition: width 0.2s; }
+    .category-header { color: var(--canpi-accent); font-weight: 600; font-size: 0.85rem;
+                       text-transform: uppercase; letter-spacing: 1px; margin-top: 1rem; }
+    .trend-chart-container { height: 150px; }
+    .bus-stat { font-size: 0.85rem; }
+    .bus-stat .value { font-weight: 700; color: var(--canpi-accent); }
+    .nav-tabs .nav-link { color: #aaa; }
+    .nav-tabs .nav-link.active { color: var(--canpi-accent); background: rgba(0,212,170,0.08); border-color: rgba(255,255,255,0.1); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+  <div class="col">
+    <h4><i class="bi bi-speedometer2"></i> Real-Time Dashboard</h4>
+  </div>
+</div>
+
+<!-- Controls Row -->
+<div class="row mb-3">
+  <div class="col-auto">
+    <label for="can-select" class="form-label small text-muted mb-1">CAN Interface</label>
+    <select id="can-select" class="form-select form-select-sm" style="width: 200px;">
+      {% for iface in interfaces %}
+      <option value="{{ iface }}">{{ iface }}</option>
+      {% endfor %}
+      <option value="{{ interfaces|join(',') }}">All ({{ interfaces|join(', ') }})</option>
+    </select>
+  </div>
+  <div class="col-auto d-flex align-items-end gap-2">
+    <button id="start-capture" class="btn btn-canpi btn-sm">
+      <i class="bi bi-play-fill"></i> Start Capture
+    </button>
+    <button id="stop-capture" class="btn btn-outline-danger btn-sm" disabled>
+      <i class="bi bi-stop-fill"></i> Stop Capture
+    </button>
+    <button id="export-btn" class="btn btn-outline-light btn-sm" disabled>
+      <i class="bi bi-download"></i> Export CSV
+    </button>
+    <button id="usb-log-btn" class="btn btn-outline-warning btn-sm" disabled>
+      <i class="bi bi-usb-drive"></i> Log to USB
+    </button>
+    <button id="clear-console" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-trash"></i> Clear
+    </button>
+  </div>
+  <div class="col-auto d-flex align-items-end">
+    <span id="capture-status" class="badge bg-secondary">Idle</span>
+    <span id="frame-count" class="badge bg-dark ms-2">0 frames</span>
+  </div>
+</div>
+
+<!-- Tab Navigation -->
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item">
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-gauges" type="button">
+      <i class="bi bi-speedometer"></i> Live Gauges
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-charts" type="button">
+      <i class="bi bi-graph-up"></i> Charts
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-console" type="button">
+      <i class="bi bi-terminal"></i> Console
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-bus" type="button">
+      <i class="bi bi-activity"></i> Bus Health
+    </button>
+  </li>
+</ul>
+
+<div class="tab-content">
+
+  <!-- ── Live Gauges Tab ── -->
+  <div class="tab-pane fade show active" id="tab-gauges">
+    <div id="gauges-container">
+      <p class="text-muted">Start a capture to see live decoded values...</p>
+    </div>
+  </div>
+
+  <!-- ── Charts Tab ── -->
+  <div class="tab-pane fade" id="tab-charts">
+    <div class="row mb-3">
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header"><i class="bi bi-speedometer"></i> RPM Trend</div>
+          <div class="card-body p-2 trend-chart-container">
+            <canvas id="rpm-trend-chart"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header"><i class="bi bi-speedometer2"></i> Speed Trend</div>
+          <div class="card-body p-2 trend-chart-container">
+            <canvas id="speed-trend-chart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="row mb-3">
+      <div class="col-md-8">
+        <div class="card">
+          <div class="card-header"><i class="bi bi-graph-up"></i> Frame Rate (frames/sec)</div>
+          <div class="card-body p-2" style="height:200px;">
+            <canvas id="rate-chart"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-header"><i class="bi bi-pie-chart"></i> Frames by ID</div>
+          <div class="card-body p-2" style="height:200px;">
+            <canvas id="id-chart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Console Tab ── -->
+  <div class="tab-pane fade" id="tab-console">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-terminal"></i> CAN Frame Console</span>
+        <span id="console-count" class="small text-muted">0 lines</span>
+      </div>
+      <div class="card-body p-0">
+        <div id="console" class="console-log" style="height:500px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Bus Health Tab ── -->
+  <div class="tab-pane fade" id="tab-bus">
+    <div class="row">
+      <div class="col-md-4">
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-activity"></i> Bus Statistics</div>
+          <div class="card-body" id="bus-stats">
+            <p class="text-muted">Start a capture to see bus statistics...</p>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-8">
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-list-ol"></i> Frame ID Frequency</div>
+          <div class="card-body p-0">
+            <div id="id-freq-table" style="max-height:400px; overflow-y:auto;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- PAMAS Section (if admin) -->
+{% if role == 'admin' %}
+<div class="row mt-3">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-droplet"></i> PAMAS S50P Fuel Quality
+          <span id="pamas-mode-badge" class="badge bg-info ms-2" style="font-size:0.7rem;">auto-detect</span>
+        </span>
+        <div class="d-flex align-items-center gap-2">
+          <select id="pamas-port" class="form-select form-select-sm" style="width:220px;" title="Override: manually select a port (or leave on Auto)">
+            <option value="auto" selected>Auto-detect</option>
+            <option value="">Simulation (no device)</option>
+          </select>
+          <button id="pamas-refresh-ports" class="btn btn-outline-secondary btn-sm" title="Refresh ports">
+            <i class="bi bi-arrow-clockwise"></i>
+          </button>
+          <button id="pamas-start" class="btn btn-canpi btn-sm" title="Override auto-detect with selected port">
+            <i class="bi bi-play-fill"></i> Manual Start
+          </button>
+          <button id="pamas-stop" class="btn btn-outline-warning btn-sm" title="Stop override and return to auto-detect">
+            <i class="bi bi-arrow-repeat"></i> Reset to Auto
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="pamas-data" class="row"></div>
+        <p id="pamas-idle" class="text-muted mb-0">PAMAS auto-detect is active. Devices are monitored automatically when plugged in.</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/canpi.js') }}"></script>
+{% endblock %}

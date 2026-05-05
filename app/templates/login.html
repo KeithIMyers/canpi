@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}CanPi - Login{% endblock %}
+{% block content %}
+<div class="row justify-content-center mt-5">
+  <div class="col-md-5 col-lg-4">
+    <div class="card">
+      <div class="card-header text-center">
+        <h4 class="mb-0"><i class="bi bi-cpu"></i> CanPi Login</h4>
+      </div>
+      <div class="card-body">
+        <form method="post" action="{{ url_for('main.login') }}">
+          <div class="mb-3">
+            <label for="username" class="form-label">Username</label>
+            <input type="text" class="form-control" id="username" name="username" required autofocus>
+          </div>
+          <div class="mb-3">
+            <label for="password" class="form-label">Password</label>
+            <input type="password" class="form-control" id="password" name="password" required>
+          </div>
+          <button type="submit" class="btn btn-canpi w-100">
+            <i class="bi bi-box-arrow-in-right"></i> Login
+          </button>
+        </form>
+      </div>
+    </div>
+    <p class="text-muted text-center mt-3 small">Default: admin / admin</p>
+  </div>
+</div>
+{% endblock %}

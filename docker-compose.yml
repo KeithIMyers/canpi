@@ -1,0 +1,18 @@
+services:
+  canpi-web:
+    build: .
+    container_name: canpi-web
+    restart: always
+    network_mode: host
+    privileged: true
+    volumes:
+      - canpi-data:/data
+      - /media/usb:/media/usb
+      - /dev:/dev
+    environment:
+      - DB_PATH=/data/canpi.db
+      - SECRET_KEY=${SECRET_KEY:-changeme_in_production}
+      - CAN_INTERFACES=can0,can1,can9
+
+volumes:
+  canpi-data:

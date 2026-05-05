@@ -1,0 +1,5 @@
+flask==3.0.3
+python-can==4.3.1
+pyserial==3.5
+pymodbus==3.6.4
+gunicorn==22.0.0
