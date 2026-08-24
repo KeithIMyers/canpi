@@ -412,7 +412,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     for (const p of ports) {
                         const opt = document.createElement('option');
                         opt.value = p.path;
-                        opt.textContent = p.path + (p.real_path !== p.path ? ' \u2192 ' + p.real_path : '');
+                        opt.textContent = p.path + (p.real_path !== p.path ? ' \u2192 ' + p.real_path : '') + (p.usb ? ' (USB)' : ' (built-in UART)');
                         pamasPort.appendChild(opt);
                     }
                     pamasPort.value = current;
@@ -432,8 +432,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Update mode badge
                 if (pamasModeBadge) {
                     if (s.auto_mode) {
-                        pamasModeBadge.textContent = s.simulate ? 'auto \u2022 simulation' : 'auto \u2022 ' + s.active_ports.join(', ');
-                        pamasModeBadge.className = 'badge bg-info ms-2';
+                        if (!s.running) {
+                            pamasModeBadge.textContent = 'auto \u2022 no device';
+                            pamasModeBadge.className = 'badge bg-secondary ms-2';
+                        } else {
+                            pamasModeBadge.textContent = 'auto \u2022 ' + s.active_ports.join(', ');
+                            pamasModeBadge.className = 'badge bg-info ms-2';
+                        }
                     } else {
                         pamasModeBadge.textContent = 'manual \u2022 ' + s.mode;
                         pamasModeBadge.className = 'badge bg-warning text-dark ms-2';
@@ -457,26 +462,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 const resp = await fetch('/pamas/telemetry');
                 const devices = await resp.json();
                 if (!pamasData || devices.length === 0) return;
-                pamasData.innerHTML = devices.map(d => `
+                pamasData.innerHTML = devices.map(d => {
+                    const counts = d.channel_counts || {};
+                    const channelCells = Object.keys(counts).map(ch => `
+                        <div class="col-3">${ch.replace('um', '\u00b5m')}: <strong>${counts[ch]}</strong></div>
+                    `).join('');
+                    const linkInfo = d.link_state
+                        ? `<span class="badge bg-secondary ms-1" style="font-size:0.65rem;">${d.link_state} @ ${d.baud}</span>`
+                        : '';
+                    const proto = d.protocol ? `<small class="text-muted">(${d.protocol})</small>` : '';
+                    return `
                     <div class="col-md-6 mb-2">
                         <div class="card">
                             <div class="card-body p-2">
                                 <h6 class="mb-1">Device #${d.device_id} <small class="text-muted">${d.port}</small>
                                     <span class="status-dot ${d.connected ? 'active' : 'inactive'} ms-1"></span>
+                                    ${linkInfo}
                                 </h6>
                                 <div class="row small">
-                                    <div class="col-6">Fuel: <strong>${d.fuel_type || '-'}</strong></div>
-                                    <div class="col-6">Quality: <strong>${d.quality_index || '-'}</strong></div>
-                                    <div class="col-6">Particles (4\u00b5m): <strong>${d.particle_count_4um || '-'}</strong></div>
-                                    <div class="col-6">Water: <strong>${d.water_content_ppm || '-'} ppm</strong></div>
-                                    <div class="col-6">Temp: <strong>${d.temperature_c || '-'}\u00b0C</strong></div>
-                                    <div class="col-6">Flow: <strong>${d.flow_rate_ml_min || '-'} ml/min</strong></div>
-                                    <div class="col-12">ISO Class: <strong>${d.iso_class || '-'}</strong></div>
+                                    <div class="col-6">ISO 4406: <strong>${d.iso_class || '-'}</strong> ${proto}</div>
+                                    <div class="col-6">Flow: <strong>${d.flow_rate_ml_min != null ? d.flow_rate_ml_min + ' ml/min' : '-'}</strong></div>
+                                    ${channelCells ? `<div class="col-12 mt-1 text-muted">Counts per 100 ml${d.counts_unverified ? ' (unverified mapping)' : ''}:</div>${channelCells}` : ''}
+                                    ${d.status ? `<div class="col-12 mt-1">Status: <strong>${d.status}</strong></div>` : ''}
+                                    ${d.raw_line ? `<div class="col-12 text-muted text-truncate" title="${d.raw_line}">Last line: <code>${d.raw_line}</code></div>` : ''}
+                                    ${!d.iso_class && !channelCells && d.link_state ? `<div class="col-12 text-muted">Listening for data\u2026 check <code>/pamas/raw</code> to inspect the wire format.</div>` : ''}
                                 </div>
                             </div>
                         </div>
-                    </div>
-                `).join('');
+                    </div>`;
+                }).join('');
             } catch (e) { /* silent */ }
         }
 
