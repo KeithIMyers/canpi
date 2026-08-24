@@ -191,6 +191,75 @@ CANPI_SIGNALS = {
 }
 
 
+# Standard OBD-II Mode 01 PID responses from ECU IDs 0x7E8-0x7EF.
+# Data layout is usually single-frame ISO-TP: len, 0x41, PID, A, B, C, D...
+OBD_PID_SIGNALS = {
+    0x04: (
+        'engine_load',
+        Signal('Engine Load', '%', 0, 100,
+               icon='bi-bar-chart-fill', category='engine', format_str='.1f'),
+        lambda data: data[0] * 100.0 / 255.0,
+        1,
+    ),
+    0x05: (
+        'coolant_temp',
+        Signal('Coolant Temperature', '°C', -40, 150, warn_high=105,
+               icon='bi-thermometer-half', category='engine', format_str='.1f'),
+        lambda data: data[0] - 40,
+        1,
+    ),
+    0x0C: (
+        'rpm',
+        Signal('Engine RPM', 'rpm', 0, 8000, warn_low=500, warn_high=6500,
+               icon='bi-speedometer', category='engine', format_str='.0f'),
+        lambda data: ((data[0] * 256) + data[1]) / 4.0,
+        2,
+    ),
+    0x0D: (
+        'speed',
+        Signal('Vehicle Speed', 'km/h', 0, 250, warn_high=200,
+               icon='bi-speedometer2', category='vehicle', format_str='.0f'),
+        lambda data: data[0],
+        1,
+    ),
+    0x0F: (
+        'intake_temp',
+        Signal('Intake Air Temp', '°C', -40, 80, warn_high=60,
+               icon='bi-wind', category='engine', format_str='.1f'),
+        lambda data: data[0] - 40,
+        1,
+    ),
+    0x10: (
+        'maf_flow',
+        Signal('MAF Air Flow', 'g/s', 0, 650,
+               icon='bi-wind', category='engine', format_str='.1f'),
+        lambda data: ((data[0] * 256) + data[1]) / 100.0,
+        2,
+    ),
+    0x11: (
+        'throttle',
+        Signal('Throttle Position', '%', 0, 100,
+               icon='bi-arrow-up-right', category='engine', format_str='.1f'),
+        lambda data: data[0] * 100.0 / 255.0,
+        1,
+    ),
+    0x2F: (
+        'fuel_level',
+        Signal('Fuel Level', '%', 0, 100, warn_low=10,
+               icon='bi-fuel-pump', category='vehicle', format_str='.1f'),
+        lambda data: data[0] * 100.0 / 255.0,
+        1,
+    ),
+    0x42: (
+        'battery_voltage',
+        Signal('Control Module Voltage', 'V', 8, 16, warn_low=11.5, warn_high=15.0,
+               icon='bi-battery-charging', category='electrical', format_str='.2f'),
+        lambda data: ((data[0] * 256) + data[1]) / 1000.0,
+        2,
+    ),
+}
+
+
 class CANDecoder:
     """
     Decodes raw CAN frames into named parameter values using signal definitions.
@@ -226,6 +295,10 @@ class CANDecoder:
             data = bytes.fromhex(data_hex)
         except (ValueError, TypeError):
             return []
+
+        obd_decoded = self._decode_obd_response(arb_id, data, frame)
+        if obd_decoded:
+            return obd_decoded
 
         signals = CANPI_SIGNALS.get(arb_id, {})
         decoded = []
@@ -266,6 +339,54 @@ class CANDecoder:
                 continue
 
         return decoded
+
+    def _decode_obd_response(self, arb_id: int, data: bytes, frame: Dict) -> List[Dict]:
+        if not (0x7E8 <= arb_id <= 0x7EF) or len(data) < 4:
+            return []
+
+        payload_len = data[0] & 0x0F
+        mode = data[1]
+        pid = data[2]
+        if payload_len < 3 or mode != 0x41 or pid not in OBD_PID_SIGNALS:
+            return []
+
+        key, signal, decode_fn, needed = OBD_PID_SIGNALS[pid]
+        payload = data[3:]
+        if len(payload) < needed:
+            return []
+
+        try:
+            value = decode_fn(payload)
+        except (IndexError, TypeError, ZeroDivisionError):
+            self._error_count += 1
+            return []
+
+        entry = {
+            'key': key,
+            'name': signal.name,
+            'value': value,
+            'formatted': f'{value:{signal.format_str}}',
+            'unit': signal.unit,
+            'min': signal.min_val,
+            'max': signal.max_val,
+            'warn_low': signal.warn_low,
+            'warn_high': signal.warn_high,
+            'icon': signal.icon,
+            'category': signal.category,
+            'format': signal.format_str,
+            'timestamp': frame.get('timestamp', time.time()),
+            'interface': frame.get('interface', ''),
+            'source': f'OBD-II ECU {hex(arb_id)} PID {hex(pid)}',
+            'status': self._calc_status(value, signal),
+        }
+        with self._lock:
+            self._values[key] = entry
+            if key in ('rpm', 'speed', 'coolant_temp', 'engine_load', 'fuel_level'):
+                hist = self._history[key]
+                hist.append({'t': entry['timestamp'], 'v': value})
+                if len(hist) > self._max_history:
+                    hist.pop(0)
+        return [entry]
 
     def _calc_status(self, value, signal: Signal) -> str:
         if signal.warn_high is not None and value > signal.warn_high:
@@ -322,6 +443,19 @@ class CANDecoder:
                     'icon': signal.icon,
                     'category': signal.category,
                 })
+        for pid, (key, signal, _, _) in sorted(OBD_PID_SIGNALS.items()):
+            defs.append({
+                'key': key,
+                'arb_id': f'0x7e8 PID {hex(pid)}',
+                'name': signal.name,
+                'unit': signal.unit,
+                'min': signal.min_val,
+                'max': signal.max_val,
+                'warn_low': signal.warn_low,
+                'warn_high': signal.warn_high,
+                'icon': signal.icon,
+                'category': signal.category,
+            })
         return defs
 
     def reset(self):

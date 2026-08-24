@@ -13,6 +13,10 @@ services:
       - DB_PATH=/data/canpi.db
       - SECRET_KEY=${SECRET_KEY:-changeme_in_production}
       - CAN_INTERFACES=can0,can1,can9
+      # Optional: set PAMAS_PORTS=/dev/ttyUSB0 to force a specific RS485 adapter.
+      - PAMAS_PORTS=${PAMAS_PORTS:-}
+      - PAMAS_SLAVE_IDS=${PAMAS_SLAVE_IDS:-1,2,3,4,5,6,7,8,9,10}
+      - PAMAS_BAUDRATE=${PAMAS_BAUDRATE:-9600}
 
 volumes:
   canpi-data:

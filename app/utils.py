@@ -92,62 +92,138 @@ class USBManager:
 
 
 class PAMASDevice:
-    """Represents a single PAMAS S50P fuel quality device."""
+    """Represents one Modbus slave on an RS485 bus."""
 
-    def __init__(self, device_id: int, port: str):
+    def __init__(self, device_id: int, port: str, slave_id: int):
         self.device_id = device_id
         self.port = port
+        self.slave_id = slave_id
         self.connected = False
         self.last_reading: Optional[Dict] = None
         self.last_update: float = 0
+        self.last_error: Optional[str] = None
 
 
 class PAMASManager:
     """
     Manages PAMAS S50P fuel quality monitoring via RS485/Modbus-RTU.
 
-    Auto-detects serial devices on startup and continuously watches for
-    hotplugged RS485 adapters. Falls back to simulation mode when no
-    real devices are found.
+    Auto-detect only considers likely external RS485 adapters by default.
+    Built-in Pi console UARTs are ignored unless explicitly configured with
+    PAMAS_PORTS. One RS485 port can host multiple Modbus slave IDs.
     """
 
-    # Glob patterns for serial/RS485 devices
-    SERIAL_PATTERNS = [
-        '/dev/ttyUSB*', '/dev/ttyACM*',
-        '/dev/ttyAMA*', '/dev/ttyS*',
+    AUTO_PATTERNS = [
         '/dev/serial/by-id/*',
+        '/dev/ttyUSB*',
+        '/dev/ttyACM*',
     ]
+    MANUAL_PATTERNS = AUTO_PATTERNS + [
+        '/dev/ttyAMA*',
+        '/dev/ttyS*',
+    ]
+    DEFAULT_SLAVE_IDS = list(range(1, 11))  # scan IDs 1-10 by default
+    DEFAULT_BAUDRATE = 9600
+    POLL_INTERVAL_SEC = 2.0
+    WATCH_INTERVAL_SEC = 5.0
+    MODBUS_REGISTER = 0x0000
+    MODBUS_REGISTER_COUNT = 10
 
     def __init__(self):
-        self._devices: Dict[int, PAMASDevice] = {}
+        self._devices: Dict[str, PAMASDevice] = {}
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._watcher_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._simulate = True
         self._active_ports: List[str] = []
-        self._auto_mode = True  # True = auto-detect, False = manual override
+        self._auto_mode = True
         self._mode_label = 'idle'
+        self._last_scan: List[Dict] = []
+        self._explicit_ports = self._parse_ports(os.environ.get('PAMAS_PORTS', ''))
+        self._slave_ids = self._parse_slave_ids(os.environ.get('PAMAS_SLAVE_IDS', ''))
+        self._baudrate = self._parse_int(
+            os.environ.get('PAMAS_BAUDRATE'), self.DEFAULT_BAUDRATE
+        )
+        self._last_logged_errors: Dict[str, str] = {}
 
-    # ── Port scanning ────────────────────────────────────────────────
+    # Port scanning
 
     @staticmethod
-    def scan_ports() -> List[Dict]:
-        """Detect available serial/TTY devices."""
+    def _parse_ports(value: str) -> List[str]:
+        return [p.strip() for p in value.split(',') if p.strip()]
+
+    @classmethod
+    def _parse_slave_ids(cls, value: str) -> List[int]:
+        ids = []
+        for part in value.split(','):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                slave_id = int(part, 0)
+            except ValueError:
+                continue
+            if 1 <= slave_id <= 247 and slave_id not in ids:
+                ids.append(slave_id)
+        return ids or list(cls.DEFAULT_SLAVE_IDS)
+
+    @staticmethod
+    def _parse_int(value: Optional[str], default: int) -> int:
+        try:
+            return int(value) if value else default
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _is_console_uart(path: str) -> bool:
+        real = os.path.realpath(path)
+        name = os.path.basename(real)
+        return name.startswith('ttyAMA') or name.startswith('ttyS')
+
+    @staticmethod
+    def _is_available(path: str) -> bool:
+        return os.path.exists(path) and os.access(path, os.R_OK | os.W_OK)
+
+    @classmethod
+    def _expand_patterns(cls, patterns: List[str]) -> List[str]:
         import glob
-        found = set()
-        for pat in PAMASManager.SERIAL_PATTERNS:
-            found.update(glob.glob(pat))
+        found = []
+        for pat in patterns:
+            found.extend(glob.glob(pat))
+        return sorted(found)
+
+    @classmethod
+    def scan_ports(cls, include_manual: bool = False) -> List[Dict]:
+        """Detect serial ports that are plausible PAMAS RS485 adapters."""
+        patterns = cls.MANUAL_PATTERNS if include_manual else cls.AUTO_PATTERNS
         ports = []
         seen_real = set()
-        for p in sorted(found):
-            real = os.path.realpath(p)
-            if real not in seen_real:
-                seen_real.add(real)
-                ports.append({'path': p, 'real_path': real})
+        for path in cls._expand_patterns(patterns):
+            real = os.path.realpath(path)
+            if real in seen_real:
+                continue
+            seen_real.add(real)
+            ignored = False
+            reason = ''
+            if not cls._is_available(real):
+                ignored = True
+                reason = 'not readable/writable'
+            elif not include_manual and cls._is_console_uart(real):
+                ignored = True
+                reason = 'built-in UART ignored in auto mode'
+            if not ignored:
+                ports.append({'path': path, 'real_path': real})
+            elif include_manual:
+                ports.append({'path': path, 'real_path': real, 'ignored': True, 'reason': reason})
         return ports
 
-    # ── Auto-detect watcher ──────────────────────────────────────────
+    def _configured_or_detected_ports(self) -> List[str]:
+        if self._explicit_ports:
+            return [p for p in self._explicit_ports if self._is_available(p)]
+        return [p['path'] for p in self.scan_ports(include_manual=False)]
+
+    # Auto-detect watcher
 
     def start_watcher(self):
         """Start the background device watcher that auto-starts monitoring."""
@@ -158,31 +234,22 @@ class PAMASManager:
         self._watcher_thread.start()
 
     def _watch_loop(self):
-        """Periodically scan for serial devices; auto-start/restart as needed."""
+        """Periodically scan for RS485 adapters; auto-start/restart as needed."""
         while not self._stop.is_set():
             if self._auto_mode:
-                detected = [p['path'] for p in self.scan_ports()]
+                self._last_scan = self.scan_ports(include_manual=True)
+                new = sorted(self._configured_or_detected_ports())
                 current = sorted(self._active_ports)
-                new = sorted(detected)
 
                 if new != current:
-                    # Devices changed — restart with new set
                     self._internal_stop()
-                    if new:
-                        self._internal_start(new)
-                    else:
-                        # No real devices — run simulation
-                        self._internal_start(None)
+                    self._internal_start(new or None)
                 elif not self.is_running:
-                    # Not running yet — start with whatever we have
-                    if new:
-                        self._internal_start(new)
-                    else:
-                        self._internal_start(None)
+                    self._internal_start(new or None)
 
-            self._stop.wait(timeout=5.0)
+            self._stop.wait(timeout=self.WATCH_INTERVAL_SEC)
 
-    # ── Internal start/stop (no auto_mode change) ───────────────────
+    # Internal start/stop
 
     def _internal_start(self, ports: Optional[List[str]]):
         """Start monitoring without changing auto_mode."""
@@ -191,22 +258,36 @@ class PAMASManager:
 
         self._stop_poll = threading.Event()
 
-        if ports:
-            self._simulate = False
-            self._active_ports = list(ports)
-            self._mode_label = f'real ({len(ports)} device{"s" if len(ports) != 1 else ""})'
-            with self._lock:
-                self._devices.clear()
-                for i, port in enumerate(ports):
-                    self._devices[i] = PAMASDevice(device_id=i + 1, port=port)
-        else:
-            self._simulate = True
-            self._active_ports = []
-            self._mode_label = 'simulation'
-            with self._lock:
-                self._devices.clear()
-                for i in range(2):
-                    self._devices[i] = PAMASDevice(device_id=i + 1, port=f"/dev/ttyS{i}")
+        with self._lock:
+            self._devices.clear()
+
+            if ports:
+                self._simulate = False
+                self._active_ports = list(ports)
+                self._mode_label = (
+                    f"real ({len(ports)} port{'s' if len(ports) != 1 else ''}, "
+                    f"slave IDs {','.join(str(i) for i in self._slave_ids)})"
+                )
+                for port in ports:
+                    for slave_id in self._slave_ids:
+                        key = f"{port}:{slave_id}"
+                        self._devices[key] = PAMASDevice(
+                            device_id=slave_id, port=port, slave_id=slave_id
+                        )
+                self._log(
+                    f"monitoring PAMAS ports={ports} slave_ids={self._slave_ids} "
+                    f"baudrate={self._baudrate}"
+                )
+            else:
+                self._simulate = True
+                self._active_ports = []
+                self._mode_label = 'simulation'
+                for slave_id in (1, 2):
+                    key = f"simulation:{slave_id}"
+                    self._devices[key] = PAMASDevice(
+                        device_id=slave_id, port='simulation', slave_id=slave_id
+                    )
+                self._log("no RS485 adapter detected; using PAMAS simulation")
 
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
@@ -216,13 +297,13 @@ class PAMASManager:
         if hasattr(self, '_stop_poll'):
             self._stop_poll.set()
         if self._thread:
-            self._thread.join(timeout=3)
+            self._thread.join(timeout=6)
             self._thread = None
         with self._lock:
             self._devices.clear()
         self._active_ports = []
 
-    # ── Public API ───────────────────────────────────────────────────
+    # Public API
 
     def start(self, ports: Optional[List[str]] = None):
         """Manually start monitoring. Disables auto-detect."""
@@ -231,7 +312,7 @@ class PAMASManager:
         self._internal_start(ports)
 
     def stop(self):
-        """Manually stop monitoring. Re-enables auto-detect."""
+        """Stop manual override and re-enable auto-detect."""
         self._internal_stop()
         self._auto_mode = True
         self._mode_label = 'auto-detect'
@@ -243,14 +324,16 @@ class PAMASManager:
             for dev in self._devices.values():
                 entry = {
                     "device_id": dev.device_id,
+                    "slave_id": dev.slave_id,
                     "port": dev.port,
                     "connected": dev.connected,
                     "last_update": dev.last_update,
+                    "last_error": dev.last_error,
                 }
                 if dev.last_reading:
                     entry.update(dev.last_reading)
                 results.append(entry)
-            return results
+            return sorted(results, key=lambda d: (d["port"], d["slave_id"]))
 
     def get_status(self) -> Dict:
         """Return current PAMAS manager status."""
@@ -261,6 +344,10 @@ class PAMASManager:
             'simulate': self._simulate,
             'active_ports': list(self._active_ports),
             'device_count': len(self._devices),
+            'slave_ids': list(self._slave_ids),
+            'baudrate': self._baudrate,
+            'configured_ports': list(self._explicit_ports),
+            'last_scan': list(self._last_scan),
         }
 
     @property
@@ -270,18 +357,26 @@ class PAMASManager:
     def _poll_loop(self):
         stop_event = self._stop_poll if hasattr(self, '_stop_poll') else self._stop
         while not stop_event.is_set() and not self._stop.is_set():
-            for dev in list(self._devices.values()):
-                if self._simulate:
+            if self._simulate:
+                for dev in list(self._devices.values()):
                     self._simulate_reading(dev)
-                else:
-                    self._real_reading(dev)
-            stop_event.wait(timeout=2.0)
+            else:
+                # Group devices by port so we open one serial connection per port.
+                port_groups: Dict[str, List[PAMASDevice]] = {}
+                for dev in list(self._devices.values()):
+                    port_groups.setdefault(dev.port, []).append(dev)
+                for port, devices in port_groups.items():
+                    if stop_event.is_set():
+                        break
+                    self._poll_port(port, devices, stop_event)
+            stop_event.wait(timeout=self.POLL_INTERVAL_SEC)
 
     def _simulate_reading(self, dev: PAMASDevice):
         """Generate simulated PAMAS S50P fuel quality data."""
         with self._lock:
             dev.connected = True
             dev.last_update = time.time()
+            dev.last_error = None
             dev.last_reading = {
                 "fuel_type": random.choice(["Diesel", "Gasoline", "Jet-A1"]),
                 "quality_index": round(random.uniform(85, 100), 1),
@@ -292,59 +387,92 @@ class PAMASManager:
                 "temperature_c": round(random.uniform(15, 35), 1),
                 "flow_rate_ml_min": round(random.uniform(50, 500), 1),
                 "iso_class": random.choice(["18/16/13", "19/17/14", "17/15/12"]),
-                "status": "OK",
+                "status": "SIMULATED",
             }
 
-    def _real_reading(self, dev: PAMASDevice):
-        """Read from a real PAMAS S50P device via Modbus-RTU."""
+    def _poll_port(self, port: str, devices: List[PAMASDevice], stop_event: threading.Event):
+        """Open one serial connection and poll all slave IDs on this port."""
+        from pymodbus.client import ModbusSerialClient
+        client = None
         try:
-            from pymodbus.client import ModbusSerialClient
             client = ModbusSerialClient(
-                port=dev.port,
-                baudrate=9600,
+                port=port,
+                baudrate=self._baudrate,
                 parity='N',
                 stopbits=1,
                 bytesize=8,
-                timeout=2,
+                timeout=1,
             )
             if not client.connect():
-                with self._lock:
-                    dev.connected = False
+                for dev in devices:
+                    self._mark_error(dev, "unable to open serial port")
                 return
+            for dev in devices:
+                if stop_event.is_set():
+                    break
+                self._read_slave(client, dev)
+        except Exception as exc:
+            for dev in devices:
+                self._mark_error(dev, str(exc))
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
-            # Read holding registers (addresses are device-specific)
+    def _read_slave(self, client, dev: PAMASDevice):
+        """Query one Modbus slave using an already-open client."""
+        try:
             result = client.read_holding_registers(
-                address=0x0000, count=10, slave=dev.device_id
+                address=self.MODBUS_REGISTER,
+                count=self.MODBUS_REGISTER_COUNT,
+                slave=dev.slave_id,
             )
             if result.isError():
-                with self._lock:
-                    dev.connected = False
-                client.close()
+                self._mark_error(dev, f"Modbus error: {result}")
                 return
-
             regs = result.registers
+            if len(regs) < self.MODBUS_REGISTER_COUNT:
+                self._mark_error(dev, f"short register read: {len(regs)}")
+                return
             with self._lock:
                 dev.connected = True
                 dev.last_update = time.time()
-                dev.last_reading = {
-                    "fuel_type": ["Unknown", "Diesel", "Gasoline", "Jet-A1"][
-                        min(regs[0], 3)
-                    ],
-                    "quality_index": regs[1] / 10.0,
-                    "particle_count_4um": regs[2],
-                    "particle_count_6um": regs[3],
-                    "particle_count_14um": regs[4],
-                    "water_content_ppm": regs[5] / 10.0,
-                    "temperature_c": regs[6] / 10.0,
-                    "flow_rate_ml_min": regs[7] / 10.0,
-                    "iso_class": f"{regs[8]>>8}/{regs[8]&0xFF}/{regs[9]&0xFF}",
-                    "status": "OK",
-                }
-            client.close()
+                dev.last_error = None
+                dev.last_reading = self._decode_registers(regs)
+        except Exception as exc:
+            self._mark_error(dev, str(exc))
 
-        except Exception:
-            with self._lock:
-                dev.connected = False
+    def _decode_registers(self, regs: List[int]) -> Dict:
+        """Decode the current placeholder PAMAS register map."""
+        fuel_types = ["Unknown", "Diesel", "Gasoline", "Jet-A1"]
+        return {
+            "fuel_type": fuel_types[min(max(regs[0], 0), len(fuel_types) - 1)],
+            "quality_index": regs[1] / 10.0,
+            "particle_count_4um": regs[2],
+            "particle_count_6um": regs[3],
+            "particle_count_14um": regs[4],
+            "water_content_ppm": regs[5] / 10.0,
+            "temperature_c": regs[6] / 10.0,
+            "flow_rate_ml_min": regs[7] / 10.0,
+            "iso_class": f"{regs[8] >> 8}/{regs[8] & 0xFF}/{regs[9] & 0xFF}",
+            "status": "OK",
+            "raw_registers": regs,
+        }
+
+    def _mark_error(self, dev: PAMASDevice, message: str):
+        with self._lock:
+            dev.connected = False
+            dev.last_error = message
+        key = f"{dev.port}:{dev.slave_id}"
+        if self._last_logged_errors.get(key) != message:
+            self._last_logged_errors[key] = message
+            self._log(f"{key} {message}")
+
+    @staticmethod
+    def _log(message: str):
+        print(f"[PAMAS] {message}", flush=True)
 
 
 # Module-level singleton

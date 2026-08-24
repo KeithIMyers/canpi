@@ -11,9 +11,12 @@ echo "[CanPi] Setting up CAN interfaces..."
 for iface in can0 can1; do
     if ip link show "$iface" &>/dev/null; then
         ip link set "$iface" down 2>/dev/null || true
-        ip link set "$iface" type can bitrate 500000
+        ip link set dev "$iface" type can listen-only off 2>/dev/null || true
+        ip link set dev "$iface" type can fd off 2>/dev/null || true
+        ip link set "$iface" type can bitrate 500000 fd off restart-ms 1000 berr-reporting on
         ip link set "$iface" up
-        echo "[CanPi] $iface UP at 500kbps"
+        ip link set "$iface" txqueuelen 65536 2>/dev/null || true
+        echo "[CanPi] $iface UP at classic 500kbps"
     else
         echo "[CanPi] $iface not found (shield not connected?)"
     fi
