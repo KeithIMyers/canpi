@@ -26,9 +26,10 @@
   3. Verify with `cansend can0 1A1#1234567890ABCDEF`.
 
 ### PAMAS S50P via RS485
-- **Protocol**: Modbus‑RTU over RS485 (typically 9600 bps, 8N1).
-- **Multiple Devices**: Use RS485 hub with addressable IDs; implement a daisy‑chain or multi‑master scheme.
-- **Integration**: Provide a Python library (e.g., `pymodbus`) that can open several serial ports (`/dev/ttyS0`, `/dev/ttyS1`, …) and parse fuel‑quality registers.
+- **Protocol**: proprietary serial streaming over RS485 — NOT documented publicly. The counter transmits results after each measurement cycle; PAMAS's own POV/PCT software decodes them. (The earlier Modbus multi-drop assumption was wrong; Modbus/Profibus exist only as factory options.)
+- **Topology**: point-to-point per the S50 user manual — one counter per RS485 adapter. Multiple counters require multiple USB-RS485 adapters.
+- **Data reported**: particle counts in 8 size channels (4/6/10/14/21/28/38/70 um(c)), ISO 4406 codes from the 4/6/14 um(c) channels, flow 5-50 ml/min. ISO class formula (manual Appendix C): `class = log2(count_per_100ml * 1.024) + 1`.
+- **Integration**: `app/pamas_protocol.py` — passive listener with auto-baud sweep, tolerant ASCII parser, one-shot Modbus probe fallback, and raw-byte capture exposed at `/pamas/raw` for finalizing the parser against a live device.
 
 ## 3. Docker Environment for Raspberry Pi 5
 - **Base Image**: `arm64v8/python:3.11-slim` (or `arm64v8/python:3.11` for full stdlib).

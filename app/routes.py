@@ -390,6 +390,17 @@ def pamas_telemetry():
     return jsonify(pamas_manager.get_telemetry())
 
 
+@bp.route('/pamas/raw')
+@admin_required
+def pamas_raw():
+    """Raw serial bytes captured from each PAMAS port (hex + ASCII).
+
+    The S50's RS485 wire format is not publicly documented; this view is
+    for identifying the real format with a live device attached.
+    """
+    return jsonify(pamas_manager.get_raw_capture())
+
+
 # ── USB Drive Management ─────────────────────────────────────────────
 
 @bp.route('/usb/drives')
