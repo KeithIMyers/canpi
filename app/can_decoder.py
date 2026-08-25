@@ -278,17 +278,22 @@ J1939_PGN_SIGNALS = {
                    icon='bi-speedometer', category='engine', format_str='.0f'),
             lambda d: _j1939_u16(d, 3) * 0.125 if d[4] <= 0xFA else None  # SPN 190
         ),
-        'engine_load': (
-            Signal('Engine Load', '%', 0, 125,
-                   icon='bi-bar-chart-fill', category='engine', format_str='.0f'),
-            lambda d: d[2] if d[2] <= 0xFA else None  # SPN 92
+        'engine_torque': (
+            Signal('Engine Torque', '%', -125, 125,
+                   icon='bi-gear-wide-connected', category='engine', format_str='.0f'),
+            lambda d: d[2] - 125 if d[2] <= 0xFA else None  # SPN 513 (actual torque, -125 offset)
         ),
     },
     0xF003: {  # EEC2
         'throttle': (
             Signal('Throttle Position', '%', 0, 100,
                    icon='bi-arrow-up-right', category='engine', format_str='.1f'),
-            lambda d: d[1] * 0.4 if d[1] <= 0xFA else None  # SPN 91
+            lambda d: d[1] * 0.4 if d[1] <= 0xFA else None  # SPN 91 (accelerator pedal)
+        ),
+        'engine_load': (
+            Signal('Engine Load', '%', 0, 125,
+                   icon='bi-bar-chart-fill', category='engine', format_str='.0f'),
+            lambda d: d[2] if d[2] <= 0xFA else None  # SPN 92 (percent load at current speed)
         ),
     },
     0xFEF1: {  # CCVS — Cruise Control/Vehicle Speed
