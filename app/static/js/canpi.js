@@ -292,7 +292,8 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             await fetch('/can/stop_capture', { method: 'POST' });
         } catch (e) { /* ignore */ }
-        stopStream();
+        // Keep the SSE stream open — gauges stay live; stopping capture
+        // only ends CSV recording.
         setCapturing(false);
     });
 
@@ -393,6 +394,10 @@ document.addEventListener('DOMContentLoaded', () => {
             stream = null;
         }
     }
+
+    // Gauges are live from page load: the server monitors all CAN buses
+    // continuously, so the stream no longer depends on a running capture.
+    startStream();
 
     // ── PAMAS Controls (auto-detect + manual override) ────────────
     if (pamasStart) {
