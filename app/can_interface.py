@@ -15,7 +15,7 @@ import time
 import random
 import struct
 from typing import List, Dict, Any, Optional
-from collections import defaultdict
+from collections import defaultdict, deque
 
 
 def msg_to_dict(msg, interface: str = "") -> Dict[str, Any]:
@@ -223,7 +223,10 @@ class CaptureSession:
         self.session_id = session_id
         self.interfaces = interfaces
         self._broadcast = broadcast_queue
-        self._buffer: List[Dict] = []
+        # Ring buffer: a J1939 bus at ~350 frames/s would grow an
+        # unbounded list by GBs/day and OOM the Pi. 100k frames is
+        # ~5 min of full-rate traffic for CSV export.
+        self._buffer: deque = deque(maxlen=100_000)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._threads: List[threading.Thread] = []
