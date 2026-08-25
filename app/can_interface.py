@@ -275,9 +275,13 @@ class CaptureSession:
             pass
 
     def _relay_sim(self, sim_q: queue.Queue):
+        from .can_decoder import can_decoder
         while not self._stop.is_set():
             try:
                 frame = sim_q.get(timeout=0.5)
+                decoded = can_decoder.decode_frame(frame)
+                if decoded:
+                    frame['decoded'] = decoded
                 self._push_frame(frame)
             except queue.Empty:
                 continue
@@ -292,10 +296,62 @@ class CaptureSession:
             try:
                 msg = bus.recv(timeout=0.5)
                 if msg is not None:
-                    self._push_frame(msg_to_dict(msg, interface=iface))
+                    # Buffer for CSV export only; the InterfaceMonitor
+                    # already decodes + broadcasts real frames to SSE.
+                    frame = msg_to_dict(msg, interface=iface)
+                    with self._lock:
+                        self._buffer.append(frame)
             except Exception:
                 continue
         bus.shutdown()
+
+
+class InterfaceMonitor(threading.Thread):
+    """Always-on reader for one real CAN interface.
+
+    Runs from app boot, independent of capture sessions: decodes every
+    frame (keeping gauges, /can/decoded, and bus stats live) and
+    broadcasts to the SSE queue. Retries forever if the interface is
+    absent or errors, so hotplugged/late interfaces recover on their own.
+    """
+
+    def __init__(self, iface: str, broadcast_queue: queue.Queue,
+                 stop_event: threading.Event):
+        super().__init__(daemon=True)
+        self.iface = iface
+        self._broadcast = broadcast_queue
+        self._stop = stop_event
+
+    def run(self):
+        from .can_decoder import can_decoder
+        while not self._stop.is_set():
+            try:
+                bus = can.interface.Bus(bustype='socketcan', channel=self.iface,
+                                        receive_own_messages=False)
+            except Exception:
+                self._stop.wait(5.0)
+                continue
+            try:
+                while not self._stop.is_set():
+                    msg = bus.recv(timeout=0.5)
+                    if msg is None:
+                        continue
+                    frame = msg_to_dict(msg, interface=self.iface)
+                    decoded = can_decoder.decode_frame(frame)
+                    if decoded:
+                        frame['decoded'] = decoded
+                    try:
+                        self._broadcast.put_nowait(frame)
+                    except queue.Full:
+                        pass
+            except Exception:
+                pass
+            finally:
+                try:
+                    bus.shutdown()
+                except Exception:
+                    pass
+            self._stop.wait(5.0)
 
 
 class CaptureManager:
@@ -310,6 +366,17 @@ class CaptureManager:
         self._lock = threading.Lock()
         # Global broadcast queue that all SSE clients read from
         self._global_queue: queue.Queue = queue.Queue(maxsize=5000)
+        self._monitors: Dict[str, InterfaceMonitor] = {}
+        self._monitor_stop = threading.Event()
+
+    def start_monitors(self, interfaces: List[str]):
+        """Start always-on per-interface readers (idempotent)."""
+        for iface in interfaces:
+            if iface in self._monitors and self._monitors[iface].is_alive():
+                continue
+            mon = InterfaceMonitor(iface, self._global_queue, self._monitor_stop)
+            mon.start()
+            self._monitors[iface] = mon
 
     @property
     def global_queue(self) -> queue.Queue:

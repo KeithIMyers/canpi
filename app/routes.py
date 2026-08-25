@@ -246,11 +246,9 @@ def can_stream():
         q = capture_manager.global_queue
         while True:
             try:
+                # Frames are decoded at the source (InterfaceMonitor for
+                # real buses, the sim relay for can9) before queueing.
                 frame = q.get(timeout=30)
-                # Decode the frame and attach decoded signals
-                decoded = can_decoder.decode_frame(frame)
-                if decoded:
-                    frame['decoded'] = decoded
                 yield f"data: {json.dumps(frame)}\n\n"
             except Exception:
                 yield ": keepalive\n\n"

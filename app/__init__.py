@@ -18,4 +18,11 @@ def create_app():
     from .utils import pamas_manager
     pamas_manager.start_watcher()
 
+    # Always-on CAN monitors: gauges/decoded values stay live from boot,
+    # independent of capture sessions (capture = CSV recording only).
+    from .can_interface import capture_manager
+    ifaces = [i.strip() for i in
+              os.environ.get('CAN_INTERFACES', 'can0,can1').split(',') if i.strip()]
+    capture_manager.start_monitors(ifaces)
+
     return app

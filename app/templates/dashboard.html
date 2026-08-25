@@ -36,7 +36,7 @@
     <label for="can-select" class="form-label small text-muted mb-1">CAN Interface</label>
     <select id="can-select" class="form-select form-select-sm" style="width: 200px;">
       {% for iface in interfaces %}
-      <option value="{{ iface }}">{{ iface }}</option>
+      <option value="{{ iface }}" {% if iface == 'can1' %}selected{% endif %}>{{ iface }}</option>
       {% endfor %}
       <option value="{{ interfaces|join(',') }}">All ({{ interfaces|join(', ') }})</option>
     </select>
@@ -93,7 +93,7 @@
   <!-- ── Live Gauges Tab ── -->
   <div class="tab-pane fade show active" id="tab-gauges">
     <div id="gauges-container">
-      <p class="text-muted">Start a capture to see live decoded values...</p>
+      <p class="text-muted">Waiting for CAN data...</p>
     </div>
   </div>
 

@@ -275,7 +275,7 @@ J1939_PGN_SIGNALS = {
     0xF004: {  # EEC1 — Electronic Engine Controller 1
         'rpm': (
             Signal('Engine RPM', 'rpm', 0, 3000, warn_high=2600,
-                   icon='bi-speedometer', category='engine', format_str='.0f'),
+                   icon='bi-speedometer', category='engine', format_str='.2f'),
             lambda d: _j1939_u16(d, 3) * 0.125 if d[4] <= 0xFA else None  # SPN 190
         ),
         'engine_torque': (
